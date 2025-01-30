@@ -15,6 +15,8 @@ Name_table_Productos= "DimProducto"
 Name_table_Lado = "DimLado"
 Name_table_Estado = "DimEstado"
 Name_table_Operador = "DimOperador"
+Name_table_Descarte = "DimMotivoDescarte"
+Name_table_Turno = "DimTurno"
 
 def Crear_Modelo_Estrella():
     try:
@@ -97,15 +99,47 @@ def Crear_Modelo_Estrella():
             BEGIN
                 CREATE TABLE {schema_name}.{Name_table_Estado} (
                     EstadoKey INT IDENTITY(1,1) PRIMARY KEY,
-                    Perfil_de_Rosca VARCHAR(50) NULL,
-                    Estado VARCHAR(50) NULL,   
-                    Motivo_Descarte VARCHAR(50) NULL,
-                    Comentario NVARCHAR(MAX) NULL      
+                    Estado VARCHAR(50) NULL   
                 )
             END
             """
             crear_tabla(cursor, schema_name, Name_table_Estado, create_table_query)
             crear_indices(cursor, schema_name, Name_table_Estado, "IX_EstadoKey", "EstadoKey")
+            conn.commit()
+
+            # Tabla DimMotivoDescarte
+            create_table_query = f"""
+            IF NOT EXISTS (
+                SELECT 1 
+                FROM INFORMATION_SCHEMA.TABLES 
+                WHERE TABLE_SCHEMA = '{schema_name}' AND TABLE_NAME = '{Name_table_Descarte}'
+            )
+            BEGIN
+                CREATE TABLE {schema_name}.{Name_table_Descarte} (
+                    DescarteKey INT IDENTITY(1,1) PRIMARY KEY,   
+                    Motivo_Descarte VARCHAR(50) NULL,
+                    Comentario NVARCHAR(MAX) NULL      
+                )
+            END
+            """
+            crear_tabla(cursor, schema_name, Name_table_Descarte, create_table_query)
+            conn.commit()
+
+            # Tabla DimTurno
+            create_table_query = f"""
+            IF NOT EXISTS (
+                SELECT 1 
+                FROM INFORMATION_SCHEMA.TABLES 
+                WHERE TABLE_SCHEMA = '{schema_name}' AND TABLE_NAME = '{Name_table_Turno}'
+            )
+            BEGIN
+                CREATE TABLE {schema_name}.{Name_table_Turno} (
+                    TurnoKey INT IDENTITY(1,1) PRIMARY KEY,   
+                    Turno INT NULL   
+                )
+            END
+            """
+            crear_tabla(cursor, schema_name, Name_table_Turno, create_table_query)
             conn.commit()
 
             # Tabla DimOperador
@@ -140,7 +174,9 @@ def Crear_Modelo_Estrella():
                     Codigo_Unico NVARCHAR(100) NOT NULL,           
                     OperadorKey INT NOT NULL,          
                     LadoKey INT NOT NULL,            
-                    EstadoKey INT NOT NULL,             
+                    EstadoKey INT NOT NULL,
+                    DescarteKey INT NULL,
+                    TurnoKey INT NULL,             
                     Variacion_de_Diametro FLOAT NULL,
                     Ovalidad FLOAT NULL,
                     Paso FLOAT NULL,
@@ -149,6 +185,7 @@ def Crear_Modelo_Estrella():
                     Altura_de_Rosca FLOAT NULL,
                     Espesor_de_Cara VARCHAR(50) NULL,
                     FechaCargaBlob DATETIME NOT NULL,
+                    Perfil_de_Rosca VARCHAR(50) NULL,
                     FOREIGN KEY (OperadorKey) REFERENCES DataMart.DimOperador(OperadorKey),
                     FOREIGN KEY (Codigo_Unico) REFERENCES DataMart.DimProducto(Codigo_Unico),
                     FOREIGN KEY (FechaKey) REFERENCES DataMart.DimTiempo(FechaKey),
@@ -270,12 +307,9 @@ def Carga_Modelo_Estrella():
 
             # Insertar en DimEstado
             insertar_dim_estado_query = f"""
-                INSERT INTO {schema_name}.{Name_table_Estado} (Perfil_de_Rosca, Estado, Motivo_Descarte, Comentario)
+                INSERT INTO {schema_name}.{Name_table_Estado} (Estado)
                 SELECT DISTINCT 
-                    Perfil_de_Rosca,
-                    Estado,
-                    Motivo_Descarte,
-                    Comentario
+                    Estado
                 FROM {Name_table_Staging}
                 WHERE Estado IS NOT NULL
                 AND NOT EXISTS (
@@ -285,6 +319,39 @@ def Carga_Modelo_Estrella():
                 );
             """
             Ejecutar_Consulta(cursor, insertar_dim_estado_query, Name_table_Estado)
+            conn.commit()
+
+            # Insertar en Dimmotivodescarte
+            insertar_dim_estado_query = f"""
+                INSERT INTO {schema_name}.{Name_table_Descarte} (Motivo_Descarte, Comentario)
+                SELECT DISTINCT 
+                    Motivo_Descarte,
+                    Comentario
+                FROM {Name_table_Staging}
+                WHERE Estado IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 
+                    FROM {schema_name}.{Name_table_Descarte} AS descarte
+                    WHERE descarte.Motivo_Descarte = {Name_table_Staging}.Motivo_Descarte
+                );
+            """
+            Ejecutar_Consulta(cursor, insertar_dim_estado_query, Name_table_Descarte)
+            conn.commit()
+
+            # Insertar en Dimturno
+            insertar_dim_lado_query = f"""
+                INSERT INTO {schema_name}.{Name_table_Turno} (Turno)
+                SELECT DISTINCT 
+                    Turno
+                FROM {Name_table_Staging}
+                WHERE Lado IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 
+                    FROM {schema_name}.{Name_table_Turno} AS turno
+                    WHERE turno.Turno = {Name_table_Staging}.Turno
+                );
+            """
+            Ejecutar_Consulta(cursor, insertar_dim_lado_query, Name_table_Turno)
             conn.commit()
 
             # Insertar en DimOperador
@@ -313,6 +380,9 @@ def Carga_Modelo_Estrella():
                         O.OperadorKey,
                         L.LadoKey,
                         E.EstadoKey,
+                        M.DescarteKey,
+                        Tr.TurnoKey,
+                        S.Perfil_de_Rosca,
                         S.Variacion_de_Diametro, 
                         S.Ovalidad, 
                         S.Paso, 
@@ -331,6 +401,10 @@ def Carga_Modelo_Estrella():
                         ON L.Lado = S.Lado
                     JOIN {schema_name}.DimEstado AS E 
                         ON E.Estado = S.Estado
+                    JOIN {schema_name}.DimMotivoDescarte AS M
+                        ON M.Motivo_Descarte = S.Motivo_Descarte
+                    JOIN {schema_name}.DimTurno AS Tr
+                        ON Tr.Turno = S.Turno
                     WHERE S.Codigo_Unico IS NOT NULL
                     AND S.FechaCargaBlob IS NOT NULL
                 )
@@ -340,7 +414,10 @@ def Carga_Modelo_Estrella():
                     Codigo_Unico, 
                     OperadorKey, 
                     LadoKey, 
-                    EstadoKey, 
+                    EstadoKey,
+                    DescarteKey,
+                    TurnoKey,
+                    Perfil_de_Rosca, 
                     Variacion_de_Diametro, 
                     Ovalidad, 
                     Paso, 
@@ -356,7 +433,10 @@ def Carga_Modelo_Estrella():
                     Codigo_Unico, 
                     OperadorKey, 
                     LadoKey, 
-                    EstadoKey, 
+                    EstadoKey,
+                    DescarteKey,
+                    TurnoKey,
+                    Perfil_de_Rosca, 
                     Variacion_de_Diametro, 
                     Ovalidad, 
                     Paso, 
