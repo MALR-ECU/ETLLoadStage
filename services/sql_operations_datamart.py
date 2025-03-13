@@ -250,19 +250,17 @@ def Carga_Modelo_Estrella():
 
             # Insertar en DimProducto
             insertar_dim_producto_query = f"""
-                INSERT INTO {schema_name}.{Name_table_Productos}  (Codigo_Unico, Diametro, Conexion, Orden_de_Produccion)
-                SELECT DISTINCT 
-                    Codigo_Unico,
-                    Diametro,
-                    Conexion,
-                    Orden_de_Produccion
-                FROM {Name_table_Staging}
-                WHERE Codigo_Unico IS NOT NULL
-                AND NOT EXISTS (
-                    SELECT 1 
-                    FROM {schema_name}.{Name_table_Productos} AS prod
-                    WHERE prod.Codigo_Unico = {Name_table_Staging}.Codigo_Unico
-                );
+                MERGE INTO {schema_name}.{Name_table_Productos} AS target
+                USING (
+                    SELECT DISTINCT Codigo_Unico, MAX(Diametro) AS Diametro, MAX(Conexion) AS Conexion, MAX(Orden_de_Produccion) AS Orden_de_Produccion
+                    FROM {Name_table_Staging}
+                    WHERE Codigo_Unico IS NOT NULL
+                    GROUP BY Codigo_Unico
+                ) AS source
+                ON target.Codigo_Unico = source.Codigo_Unico
+                WHEN NOT MATCHED THEN 
+                    INSERT (Codigo_Unico, Diametro, Conexion, Orden_de_Produccion)
+                    VALUES (source.Codigo_Unico, source.Diametro, source.Conexion, source.Orden_de_Produccion);
             """
             Ejecutar_Consulta(cursor, insertar_dim_producto_query, Name_table_Productos)
             conn.commit()
